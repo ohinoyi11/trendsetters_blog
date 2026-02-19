@@ -1,0 +1,20 @@
+# Database configuration
+config/db.php
+
+# XAMPP / PHP
+*.log
+*.tmp
+*.temp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.bak
+
+# Database exports
+database.sql
