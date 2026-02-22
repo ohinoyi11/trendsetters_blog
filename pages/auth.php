@@ -1,41 +1,51 @@
 <?php
-require_once __DIR__ . '/data_articles.php';
-require_once __DIR__ . '/admin/helpers.php'; // Reuse helpers for auth logic
+require_once __DIR__ . '/../data_articles.php';
+require_once __DIR__ . '/../ts-manager/helpers.php';
 
 $error = '';
-$isRegister = isset($_GET['reg']);
+$isRegister = isset($_GET['reg']) || isset($_POST['register']);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $pdo = get_pdo();
+    $pdo   = get_pdo();
     $name  = trim($_POST['name'] ?? '');
     $email = trim($_POST['email'] ?? '');
     $pass  = $_POST['password'] ?? '';
 
     if (isset($_POST['register'])) {
-        // Validation
         if (empty($name) || empty($email) || strlen($pass) < 6) {
-            $error = 'Please fill all fields. Password must be min. 6 chars.';
+            $_SESSION['flash_error'] = 'Please fill all fields. Password must be min. 6 chars.';
+            header('Location: ' . $_SERVER['HTTP_REFERER']); exit;
         } else {
             try {
-                $stmt = $pdo->prepare("INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, 'user')");
+                $stmt = $pdo->prepare("INSERT INTO users (name, email, password_hash, role, status) VALUES (?, ?, ?, 'user', 'active')");
                 $stmt->execute([$name, $email, password_hash($pass, PASSWORD_DEFAULT)]);
                 $_SESSION['site_user_id'] = $pdo->lastInsertId();
                 $_SESSION['site_user_name'] = $name;
-                header('Location: ' . $base . '/'); exit;
-            } catch (PDOException) { $error = 'Email already registered.'; }
+                $_SESSION['flash_success'] = "Welcome to the family, $name!";
+                header('Location: ' . ($base ?: '/')); exit;
+            } catch (PDOException $e) { 
+                $_SESSION['flash_error'] = 'Email already registered or system error.'; 
+                header('Location: ' . $_SERVER['HTTP_REFERER']); exit;
+            }
         }
     } else {
-        // Login
+        // Login Logic
         $stmt = $pdo->prepare("SELECT id, name, password_hash FROM users WHERE email=? AND role='user' AND status='active' LIMIT 1");
         $stmt->execute([$email]);
         $row = $stmt->fetch();
         if ($row && password_verify($pass, $row['password_hash'])) {
             $_SESSION['site_user_id']   = $row['id'];
             $_SESSION['site_user_name'] = $row['name'];
-            header('Location: ' . $base . '/'); exit;
-        } else { $error = 'Invalid email or password.'; }
+            $_SESSION['flash_success'] = "Welcome back, " . explode(' ', $row['name'])[0] . "!";
+            header('Location: ' . ($base ?: '/')); exit;
+        } else { 
+            $_SESSION['flash_error'] = 'Invalid email or password.';
+            header('Location: ' . $_SERVER['HTTP_REFERER']); exit;
+        }
     }
 }
+
+// If we reached here via GET but it was supposed to be a modal, we can still show the page as fallback
 ?>
 
 <div class="container py-20 min-h-[60vh] flex items-center justify-center">

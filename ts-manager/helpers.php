@@ -21,9 +21,10 @@ function is_super_admin(): bool {
 
 function current_admin(): array {
     return [
-        'id'   => $_SESSION['admin_user_id'] ?? 0,
-        'name' => $_SESSION['admin_name']    ?? 'Admin',
-        'role' => $_SESSION['admin_role']    ?? '',
+        'id'     => $_SESSION['admin_user_id'] ?? 0,
+        'name'   => $_SESSION['admin_name']    ?? 'Admin',
+        'role'   => $_SESSION['admin_role']    ?? '',
+        'avatar' => $_SESSION['admin_avatar']  ?? null,
     ];
 }
 
@@ -31,7 +32,7 @@ function admin_verify_login(string $username, string $password): bool {
     $pdo = get_pdo();
     // username can be email OR name
     $stmt = $pdo->prepare(
-        "SELECT id, name, password_hash, role, status
+        "SELECT id, name, password_hash, role, status, avatar
          FROM users
          WHERE (email=? OR name=?) AND role IN ('super_admin','correspondent')
          LIMIT 1"
@@ -43,29 +44,43 @@ function admin_verify_login(string $username, string $password): bool {
     $_SESSION['admin_user_id'] = $row['id'];
     $_SESSION['admin_name']    = $row['name'];
     $_SESSION['admin_role']    = $row['role'];
+    $_SESSION['admin_avatar']  = $row['avatar'];
     return true;
 }
 
 // ── Articles ─────────────────────────────────────────────────
-function load_articles(?int $author_id = null): array {
+function load_articles(?int $author_id = null, ?string $status = null): array {
     $pdo = get_pdo();
     $sql = "SELECT a.*, c.name AS category, u.name AS author_name
             FROM articles a
             LEFT JOIN categories c ON a.category_id = c.id
             LEFT JOIN users u ON a.author_id = u.id";
+    $params = [];
+    $where = [];
+
     if ($author_id !== null) {
-        $stmt = $pdo->prepare($sql . " WHERE a.author_id=? ORDER BY a.id DESC");
-        $stmt->execute([$author_id]);
-    } else {
-        $stmt = $pdo->query($sql . " ORDER BY a.id DESC");
+        $where[] = "a.author_id=?";
+        $params[] = $author_id;
     }
+    if ($status !== null) {
+        $where[] = "a.status=?";
+        $params[] = $status;
+    }
+
+    if ($where) {
+        $sql .= " WHERE " . implode(" AND ", $where);
+    }
+    $sql .= " ORDER BY a.id DESC";
+    
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
     return $stmt->fetchAll();
 }
 
 function get_article(int $id): ?array {
     $pdo  = get_pdo();
     $stmt = $pdo->prepare(
-        "SELECT a.*, c.name AS category, u.name AS author_name
+        "SELECT a.*, c.name AS category, u.name AS author_name, u.avatar AS author_avatar, u.bio AS author_bio
          FROM articles a
          LEFT JOIN categories c ON a.category_id = c.id
          LEFT JOIN users u ON a.author_id = u.id
@@ -78,27 +93,40 @@ function get_article(int $id): ?array {
 function save_article(array $data, bool $isEdit): int {
     $pdo = get_pdo();
     $catId = get_or_create_category($data['category'] ?? '');
+    
+    // Default status logic: Correspondents go to 'pending_approval', Admins to 'published'
+    // Unless status is explicitly provided (e.g. from an approval action)
+    if (!isset($data['status'])) {
+        $admin = current_admin();
+        $data['status'] = ($admin['role'] === 'super_admin') ? 'published' : 'pending_approval';
+    }
+
     if ($isEdit) {
         $pdo->prepare("UPDATE articles SET title=?,excerpt=?,content=?,image=?,category_id=?,author_id=?,
-                       date=?,read_time=?,featured=?,trending=?,views=?,comment_count=? WHERE id=?")
+                       date=?,read_time=?,featured=?,trending=?,views=?,comment_count=?,status=? WHERE id=?")
             ->execute([
                 $data['title'], $data['excerpt'], $data['content'], $data['image'],
                 $catId, $data['author_id'], $data['date'], $data['read_time'],
                 $data['featured']?1:0, $data['trending']?1:0, $data['views'], $data['comment_count'],
-                $data['id'],
+                $data['status'], $data['id']
             ]);
         return (int)$data['id'];
     } else {
         $pdo->prepare("INSERT INTO articles
-            (title,excerpt,content,image,category_id,author_id,date,read_time,featured,trending,views,comment_count)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+            (title,excerpt,content,image,category_id,author_id,date,read_time,featured,trending,views,comment_count,status)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
             ->execute([
                 $data['title'], $data['excerpt'], $data['content'], $data['image'],
                 $catId, $data['author_id'], $data['date'], $data['read_time'],
                 $data['featured']?1:0, $data['trending']?1:0, $data['views'], $data['comment_count'],
+                $data['status']
             ]);
         return (int)$pdo->lastInsertId();
     }
+}
+
+function update_article_status(int $id, string $status): void {
+    get_pdo()->prepare("UPDATE articles SET status=? WHERE id=?")->execute([$status, $id]);
 }
 
 function delete_article(int $id): void {
@@ -111,7 +139,13 @@ function load_categories(): array {
 }
 
 function load_categories_with_ids(): array {
-    return get_pdo()->query("SELECT id,name FROM categories ORDER BY name")->fetchAll();
+    return get_pdo()->query(
+        "SELECT c.id, c.name, COUNT(a.id) as article_count 
+         FROM categories c 
+         LEFT JOIN articles a ON c.id = a.category_id 
+         GROUP BY c.id 
+         ORDER BY c.name"
+    )->fetchAll();
 }
 
 function get_or_create_category(string $name): ?int {
@@ -193,6 +227,10 @@ function save_settings(array $data): void {
 }
 
 // ── Correspondents / Users ────────────────────────────────────
+function load_all_users(): array {
+    return get_pdo()->query("SELECT * FROM users ORDER BY created_at DESC")->fetchAll();
+}
+
 function load_correspondents(): array {
     return get_pdo()->query(
         "SELECT u.*, COUNT(a.id) AS article_count
@@ -211,15 +249,25 @@ function get_user_by_id(int $id): ?array {
 
 function create_correspondent(array $data): bool {
     try {
+        $role = $data['role'] ?? 'correspondent';
         get_pdo()->prepare(
-            "INSERT INTO users (name,email,password_hash,role,bio,status) VALUES (?,?,?,'correspondent',?,?)"
+            "INSERT INTO users (name,email,password_hash,role,bio,avatar,status) VALUES (?,?,?,'$role',?,?,?)"
         )->execute([
             $data['name'], $data['email'],
             password_hash($data['password'], PASSWORD_DEFAULT),
-            $data['bio'] ?? '', $data['status'] ?? 'active',
+            $data['bio'] ?? '', $data['avatar'] ?? null, $data['status'] ?? 'active',
         ]);
         return true;
     } catch (PDOException) { return false; }
+}
+
+function update_user_profile(int $id, array $data): void {
+    get_pdo()->prepare("UPDATE users SET name=?, bio=?, avatar=? WHERE id=?")
+             ->execute([$data['name'], $data['bio'] ?? '', $data['avatar'] ?? null, $id]);
+}
+
+function update_user_role(int $id, string $role): void {
+    get_pdo()->prepare("UPDATE users SET role=? WHERE id=?")->execute([$role, $id]);
 }
 
 function update_correspondent(int $id, array $data): void {
@@ -279,4 +327,8 @@ function initials(string $name): string {
     $words = array_filter(explode(' ', trim($name)));
     if (count($words) >= 2) return strtoupper(mb_substr($words[0],0,1) . mb_substr(end($words),0,1));
     return strtoupper(mb_substr($name,0,min(2,mb_strlen($name))));
+}
+
+function verified_badge(): string {
+    return '<svg class="inline-block w-4 h-4 text-blue-500 fill-current ml-1 mb-0.5" viewBox="0 0 20 20"><path d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"></path></svg>';
 }

@@ -56,6 +56,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'trending'      => isset($_POST['trending']),
         'views'         => (int)($_POST['views'] ?? 0),
         'comment_count' => (int)($_POST['comment_count'] ?? 0),
+        'status'        => $_POST['status'] ?? null,
     ];
 
     if (empty($saveData['title'])) {
@@ -170,8 +171,18 @@ if (is_super_admin()) {
           <input type="text" name="date" class="form-input" value="<?= htmlspecialchars($article['date']) ?>"/>
         </div>
         <div>
-          <label class="form-label">Read Time</label>
-          <input type="text" name="read_time" class="form-input" value="<?= htmlspecialchars($article['read_time']) ?>"/>
+          <label class="form-label">Status</label>
+          <?php if (is_super_admin()): ?>
+            <select name="status" class="form-input">
+              <option value="draft" <?= ($article['status']??'') === 'draft' ? 'selected' : '' ?>>Draft</option>
+              <option value="pending_approval" <?= ($article['status']??'') === 'pending_approval' ? 'selected' : '' ?>>Pending Review</option>
+              <option value="published" <?= ($article['status']??'') === 'published' ? 'selected' : '' ?>>Published</option>
+              <option value="rejected" <?= ($article['status']??'') === 'rejected' ? 'selected' : '' ?>>Rejected</option>
+            </select>
+          <?php else: ?>
+            <input type="text" class="form-input bg-slate-50" value="<?= htmlspecialchars(str_replace('_', ' ', $article['status'] ?? 'Pending Approval')) ?>" disabled/>
+            <input type="hidden" name="status" value="<?= htmlspecialchars($article['status'] ?? 'pending_approval') ?>"/>
+          <?php endif; ?>
         </div>
       </div>
     </div>

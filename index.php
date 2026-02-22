@@ -25,7 +25,7 @@ if ($path === '' || $path === 'index.php') {
   $page = 'category';
 } elseif ($path === 'about') {
   $page = 'about';
-} elseif ($path === 'login' || $path === 'register') {
+} elseif ($path === 'login' || $path === 'register' || $path === 'auth') {
   $page = 'auth';
 } elseif ($path === 'logout') {
   $page = 'user-logout';

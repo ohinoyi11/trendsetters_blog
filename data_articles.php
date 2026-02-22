@@ -31,7 +31,7 @@ try {
     // ── Articles ───────────────────────────────────────────────
     // Load all published articles for the frontend
     $stmt = $pdo->query(
-        "SELECT a.*, c.name AS category, u.name AS author_name, u.role AS author_role
+        "SELECT a.*, c.name AS category, u.name AS author_name, u.role AS author_role, u.avatar AS avatar
          FROM articles a
          LEFT JOIN categories c ON a.category_id = c.id
          LEFT JOIN users u ON a.author_id = u.id
@@ -50,7 +50,7 @@ try {
             'author'   => [
                 'name' => $row['author_name'],
                 'role' => $row['author_role'] === 'super_admin' ? 'Chief Editor' : 'Correspondent',
-                'avatar' => null // Will be generated via initials() helper in templates
+                'avatar' => $row['avatar'] ?: null // Fetch real avatar from DB
             ],
             'date'     => $row['date'],
             'readTime' => $row['read_time'],
